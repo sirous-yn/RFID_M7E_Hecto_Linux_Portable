@@ -1,7 +1,0 @@
-.vs
-build
-dist
-*.egg-info
-mercuryapi-*
-Examples/
-Tests/

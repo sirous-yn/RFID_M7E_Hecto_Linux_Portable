@@ -1,1 +1,0 @@
-Copy mercuryapi-BILBO-1.37.6.17.zip into this folder before running setup.sh.
