@@ -1,29 +1,39 @@
-# RFID M7E-Hecto Linux Portable
+# SparkFun M7E-Hecto RFID Reader — Linux Python Package
 
-Standalone Linux package for reading RFID tag TIDs using the SparkFun Simultaneous RFID Reader M7E-Hecto.
+A reusable Python package for reading RFID tags with the SparkFun Simultaneous RFID Reader M7E-Hecto on Linux.
 
-The package is designed to provide a simple and portable RFID interface for Linux systems. It includes the required MercuryAPI components, the Python interface, installation scripts, and a test program.
+The package provides a simple Python interface for applications that need to obtain the TID of an RFID tag.
 
-## Hardware
+## Supported hardware
 
 - SparkFun Simultaneous RFID Reader M7E-Hecto
-- USB connection
-- USB-to-UART interface based on the CH340
-- RFID tag compatible with EPC Gen2 / ISO 18000-63
+- USB connection through the onboard CH340 USB-to-serial interface
+- USB VID: `0x1A86`
+- USB PID: `0x7523`
 
-The reader is connected to the Linux computer through USB.
+The package identifies the reader by its USB VID/PID rather than assuming a fixed device such as `/dev/ttyUSB0`.
 
-## Tested Environment
+## Installation
 
-The package has been tested on:
+For detailed installation instructions, see:
 
-- Fedora Linux 43
-- x86_64
-- Python 3.14
-- M7E-Hecto firmware 2.01.06.08
+    docs/INSTALLATION.md
 
-The USB device is identified using:
+## Troubleshooting
+If you encounter problems, see:
 
-```text
-VID: 1A86
-PID: 7523
+    docs/TROUBLESHOOTING.md
+
+## Main interface
+
+The primary interface is:
+
+```python
+from rfid_reader import get_tid
+
+tid = get_tid()
+
+if tid:
+    print("RFID TID:", tid)
+else:
+    print("No RFID tag detected")

@@ -2,10 +2,14 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 SDK_ZIP="$SCRIPT_DIR/vendor/mercuryapi-BILBO-1.37.6.17.zip"
 SDK_ROOT="$SCRIPT_DIR/vendor/mercuryapi-1.37.6.17"
 WRAPPER_DIR="$SCRIPT_DIR/vendor/python-mercuryapi"
+
+PACKAGE_DIR="$SCRIPT_DIR/src/rfid_m7e_hecto"
 VENV="$SCRIPT_DIR/.venv"
+DIST_DIR="$SCRIPT_DIR/dist"
 
 log() {
     echo
@@ -324,20 +328,64 @@ if [[ ! -d "$VENV" ]]; then
     python3 -m venv "$VENV"
 fi
 
-source "$VENV/bin/activate"
+PYTHON="$VENV/bin/python"
 
-python -m pip install --upgrade pip
+"$PYTHON" -m pip install --upgrade \
+    pip \
+    setuptools \
+    wheel \
+    build
 
-python -m pip install \
+"$PYTHON" -m pip install \
     -r "$SCRIPT_DIR/requirements.txt"
 
 log "Installing python-mercuryapi"
 
 cd "$WRAPPER_DIR"
 
-python -m pip install .
+"$PYTHON" -m pip install .
 
 cd "$SCRIPT_DIR"
+
+log "Copying compiled MercuryAPI runtime into package"
+
+mkdir -p "$PACKAGE_DIR/libs"
+
+export LD_LIBRARY_PATH="$WRAPPER_DIR/build/mercuryapi/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+
+MERCURY_EXTENSION="$(
+    "$PYTHON" -c \
+        "import mercury; print(mercury.__file__)"
+)"
+
+[[ -f "$MERCURY_EXTENSION" ]] ||
+    die "Could not locate compiled MercuryAPI Python extension."
+
+cp "$MERCURY_EXTENSION" "$PACKAGE_DIR/"
+
+for lib in \
+    libltkc.so.1 \
+    libltkctm.so.1
+do
+    [[ -f "$WRAPPER_DIR/build/mercuryapi/lib/$lib" ]] ||
+        die "Missing compiled runtime library: $lib"
+
+    cp "$WRAPPER_DIR/build/mercuryapi/lib/$lib" \
+       "$PACKAGE_DIR/libs/"
+done
+
+log "Checking package contents"
+
+[[ -f "$PACKAGE_DIR/__init__.py" ]] ||
+    die "Package __init__.py is missing."
+
+[[ -f "$PACKAGE_DIR/libs/libltkc.so.1" ]] ||
+    die "libltkc.so.1 is missing from package."
+
+[[ -f "$PACKAGE_DIR/libs/libltkctm.so.1" ]] ||
+    die "libltkctm.so.1 is missing from package."
+
+find "$PACKAGE_DIR" -maxdepth 2 -type f -printf '%P\n' | sort
 
 log "Configuring USB serial permissions"
 
@@ -358,18 +406,94 @@ fi
 
 log "Checking Mercury Python module"
 
-source "$VENV/bin/activate"
-
 export LD_LIBRARY_PATH="$WRAPPER_DIR/build/mercuryapi/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
-python -c \
+"$PYTHON" -c \
     "import mercury; print('Mercury Python module: OK')"
 
-log "Checking RFID reader"
+log "Building RFID wheel"
 
-export PYTHONPATH="$SCRIPT_DIR/src"
+mkdir -p "$DIST_DIR"
 
-python - <<'PY'
+# The user maintains backups separately; remove old build outputs.
+rm -f "$DIST_DIR"/*.whl
+
+"$PYTHON" -m build --wheel --no-isolation
+
+WHEEL_FILES=("$DIST_DIR"/*.whl)
+
+if [[ ! -f "${WHEEL_FILES[0]}" ]]; then
+    die "Wheel build failed: no wheel was produced."
+fi
+
+WHEEL_PATH="${WHEEL_FILES[0]}"
+
+echo
+echo "Created wheel:"
+echo "$WHEEL_PATH"
+
+log "Installing wheel into project virtual environment"
+
+"$PYTHON" -m pip install \
+    --force-reinstall \
+    --no-deps \
+    "$WHEEL_PATH"
+
+log "Testing wheel in a clean temporary environment"
+
+WHEEL_TEST_DIR="$(mktemp -d "${TMPDIR:-/tmp}/rfid-wheel-test.XXXXXX")"
+
+cleanup() {
+    if [[ -n "${WHEEL_TEST_DIR:-}" && -d "$WHEEL_TEST_DIR" ]]; then
+        rm -rf "$WHEEL_TEST_DIR"
+    fi
+}
+
+trap cleanup EXIT
+
+python3 -m venv "$WHEEL_TEST_DIR/venv"
+
+TEST_PYTHON="$WHEEL_TEST_DIR/venv/bin/python"
+
+"$TEST_PYTHON" -m pip install --upgrade pip
+
+"$TEST_PYTHON" -m pip install "$WHEEL_PATH"
+
+cd "$WHEEL_TEST_DIR"
+
+"$TEST_PYTHON" - <<'PY'
+from pathlib import Path
+import rfid_reader
+import rfid_m7e_hecto
+
+print("rfid_reader import: OK")
+print("rfid_m7e_hecto import: OK")
+
+package_dir = Path(rfid_m7e_hecto.__file__).resolve().parent
+
+required_files = [
+    package_dir / "mercury.cpython-314-x86_64-linux-gnu.so",
+    package_dir / "libs" / "libltkc.so.1",
+    package_dir / "libs" / "libltkctm.so.1",
+]
+
+for path in required_files:
+    if not path.is_file():
+        raise RuntimeError(f"Wheel is missing required file: {path}")
+    print(f"Package file: {path.name} OK")
+
+if not callable(rfid_reader.get_tid):
+    raise RuntimeError("get_tid() is not available.")
+
+if not callable(rfid_reader.find_rfid_port):
+    raise RuntimeError("find_rfid_port() is not available.")
+
+print("Public RFID API: OK")
+PY
+
+log "Checking RFID reader using the installed wheel"
+
+"$TEST_PYTHON" - <<'PY'
 from rfid_reader import find_rfid_port
 
 try:
@@ -381,8 +505,31 @@ except Exception as exc:
     print("Connect the reader and run ./run_rfid.sh later.")
 PY
 
-log "Installation complete"
+cd "$SCRIPT_DIR"
 
+log "Checking source-tree RFID reader"
+
+export PYTHONPATH="$SCRIPT_DIR/src"
+
+"$PYTHON" - <<'PY'
+from rfid_reader import find_rfid_port
+
+try:
+    port = find_rfid_port()
+    print(f"RFID reader detected at: {port}")
+except Exception as exc:
+    print(f"Reader check: {exc}")
+    print("This is not necessarily an installation failure.")
+PY
+
+log "Installation and wheel tests completed"
+
+echo
+echo "Wheel:"
+echo "    $WHEEL_PATH"
+echo
+echo "Project virtual environment:"
+echo "    $VENV"
 echo
 echo "To test the RFID reader:"
 echo

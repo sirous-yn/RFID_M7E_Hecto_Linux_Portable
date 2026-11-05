@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rfid-m7e-hecto"
+version = "1.0.0"
+description = "Portable Linux interface for the SparkFun M7E-Hecto RFID reader"
+requires-python = ">=3.10"
+dependencies = [
+    "pyserial>=3.5"
+]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+py-modules = ["rfid_reader"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+rfid_m7e_hecto = ["libs/*.so.1", "mercury*.so"]
